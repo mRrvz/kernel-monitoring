@@ -3,6 +3,9 @@
 #include <linux/proc_fs.h> 
 #include <linux/seq_file.h>
 
+#include "hooks.h"
+#include "memory.h"
+#include "tasks.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Romanov Alexey");
@@ -15,26 +18,25 @@ MODULE_DESCRIPTION("A utility for monitoring the state of the system and kernel 
 
 static struct proc_dir_entry *proc_file = NULL;
 
-static inline void mem_print(struct seq_file *m, const char *const f, long num) {
+static inline void print_to_user(struct seq_file *m, const char *const f, const long num) {
     char tmp[256];
     int len;
 
-    len = snprintf(tmp, 256, f, num << (PAGE_SHIFT - 10));
+    len = snprintf(tmp, 256, f, num);
     seq_write(m, tmp, len);
 }
 
+static struct ftrace_hook hooked_functions[] = {
+        HOOK("sys_clone",   hook_sys_clone,   &real_sys_clone),
+        //HOOK("sys_execve",  fh_sys_execve,  &real_sys_execve),
+};
+
 static int monitor_read(struct seq_file *m, void *v) {
-    struct sysinfo i;
-    long available;
 
     ENTER_LOG();
 
-    si_meminfo(&i);
-    available = si_mem_available();
-
-    mem_print(m, "Memory total: %ld kB\n", i.totalram);
-    mem_print(m, "Free memory: %ld kB\n", i.freeram);
-    mem_print(m, "Available memory: %ld kB\n", available);
+    print_memory_statistic(m);
+    print_processes_statistic(m);
 
     EXIT_LOG();
 
@@ -47,6 +49,8 @@ static void cleanup(void) {
     if (proc_file != NULL) {
         remove_proc_entry(MODULE_NAME, NULL);
     }
+
+    remove_hooks(hooked_functions, ARRAY_SIZE(hooked_functions));
 
     EXIT_LOG();
 }
