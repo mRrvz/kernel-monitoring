@@ -2,7 +2,13 @@
 
 #pragma GCC optimize("-fno-optimize-sibling-calls")
 
-static int exec_calls = 0;
+// `syscalls_time_array` - array that stores the number of calls 
+// to each syscall per second of time for the last 24 hours (86400 seconds).
+// - Index - second of time. 
+// - Value is struct with two 64bit fields; bit is set to 1 - 
+// syscall was called this second.
+
+static volatile syscalls_info_t syscalls_time_array[86400];
 
 // sys_clone
 static asmlinkage long (*real_sys_clone)(unsigned long clone_flags,
@@ -14,20 +20,16 @@ static asmlinkage long hook_sys_clone(unsigned long clone_flags,
         int __user *child_tidptr, unsigned long tls)
 {
     long rc;
+    ktime_t time;
 
-    //pr_info("clone() before\n");
-    exec_calls++;
+    time = ktime_get_boottime();
+    // TODO: atomic operation or spinlock
+    syscalls_time_array[time].p1 |= 0x01;
 
     rc = real_sys_clone(clone_flags, newsp, parent_tidptr,
         child_tidptr, tls);
 
-    //pr_info("clone(): %ld\n", rc);
-
     return rc;
-}
-
-int get_exec_stat_calls(void) {
-    return exec_calls;
 }
 
 #define ADD_HOOK(_name, _function, _original)   \
@@ -54,7 +56,7 @@ static int resolve_hook_address(struct ftrace_hook *hook)
     return 0;
 }
 
-static void notrace fh_ftrace_thunk(unsigned long ip, unsigned long parent_ip,
+static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
 		struct ftrace_ops *ops, struct ftrace_regs *fregs)
 {
 	struct pt_regs *regs = ftrace_get_regs(fregs);
@@ -73,7 +75,7 @@ static int install_hook(struct ftrace_hook *hook) {
     }
 
     // Callback function.
-    hook->ops.func = fh_ftrace_thunk; 
+    hook->ops.func = ftrace_thunk; 
     // Save processor registers.
     hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
                     | FTRACE_OPS_FL_IPMODIFY;
