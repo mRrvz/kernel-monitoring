@@ -1,11 +1,10 @@
 #include <linux/module.h>
-#include <linux/mm.h>
+//#include <linux/mm.h>`
 #include <linux/proc_fs.h> 
-#include <linux/seq_file.h>
+//#include <linux/seq_file.h>
 
 #include "hooks.h"
-#include "memory.h"
-#include "tasks.h"
+#include "stat.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Romanov Alexey");
@@ -18,21 +17,7 @@ MODULE_DESCRIPTION("A utility for monitoring the state of the system and kernel 
 
 static struct proc_dir_entry *proc_file = NULL;
 
-static inline void print_to_user(struct seq_file *m, const char *const f, const long num) {
-    char tmp[256];
-    int len;
-
-    len = snprintf(tmp, 256, f, num);
-    seq_write(m, tmp, len);
-}
-
-static struct ftrace_hook hooked_functions[] = {
-        HOOK("sys_clone",   hook_sys_clone,   &real_sys_clone),
-        //HOOK("sys_execve",  fh_sys_execve,  &real_sys_execve),
-};
-
 static int monitor_read(struct seq_file *m, void *v) {
-
     ENTER_LOG();
 
     print_memory_statistic(m);
@@ -50,7 +35,7 @@ static void cleanup(void) {
         remove_proc_entry(MODULE_NAME, NULL);
     }
 
-    remove_hooks(hooked_functions, ARRAY_SIZE(hooked_functions));
+    remove_hooks();
 
     EXIT_LOG();
 }
@@ -78,6 +63,10 @@ static int __init md_init(void) {
     ENTER_LOG();
 
     if ((rc = proc_init())) {
+        return rc;
+    }
+
+    if ((rc = install_hooks())) {
         return rc;
     }
 
