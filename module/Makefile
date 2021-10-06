@@ -2,7 +2,7 @@ KPATH := /lib/modules/$(shell uname -r)/build
 MDIR := $(shell pwd)
 
 obj-m += monitor.o
-monitor-y := monitor_main.o stat.o hooks.o
+monitor-y := monitor_main.o stat.o hooks.o log.o
 EXTRA_CFLAGS=-I$(PWD)/inc
 
 all:

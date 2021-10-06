@@ -1,7 +1,5 @@
 #include <linux/module.h>
-//#include <linux/mm.h>`
 #include <linux/proc_fs.h> 
-//#include <linux/seq_file.h>
 
 #include "hooks.h"
 #include "stat.h"
@@ -10,11 +8,6 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Romanov Alexey");
 MODULE_DESCRIPTION("A utility for monitoring the state of the system and kernel load");
 
-#define MODULE_NAME "monitor"
-
-#define ENTER_LOG() do { printk(KERN_INFO "%s: function entry %s | line: %d\n", MODULE_NAME, __func__, __LINE__); } while(0); 
-#define EXIT_LOG() do { printk(KERN_INFO "%s: exit function %s | line: %d\n", MODULE_NAME, __func__, __LINE__); } while(0);
-
 static struct proc_dir_entry *proc_file = NULL;
 
 static int monitor_read(struct seq_file *m, void *v) {
@@ -22,6 +15,7 @@ static int monitor_read(struct seq_file *m, void *v) {
 
     print_memory_statistic(m);
     print_processes_statistic(m);
+    print_syscall_statistic(m);
 
     EXIT_LOG();
 
@@ -51,7 +45,6 @@ static int proc_init(void) {
         return -ENOMEM;
     }
 
-    printk("%s: module loaded\n", MODULE_NAME); 
     EXIT_LOG();
 
     return 0;
@@ -67,9 +60,11 @@ static int __init md_init(void) {
     }
 
     if ((rc = install_hooks())) {
+        cleanup();
         return rc;
     }
 
+    printk("%s: module loaded\n", MODULE_NAME);
     EXIT_LOG();
 
     return 0;

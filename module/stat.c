@@ -4,18 +4,10 @@ static inline long convert_to_kb(const long n) {
     return n << (PAGE_SHIFT - 10);
 }
 
-static inline void show_message(struct seq_file *m, const char *const f, const long num) {
-    char tmp[256];
-    int len;
-
-    len = snprintf(tmp, 256, f, num);
-    seq_write(m, tmp, len);
-}
-
 void print_memory_statistic(struct seq_file *m) {
-    //ENTER_LOG();
-
     struct sysinfo i;
+
+    ENTER_LOG();
 
     si_meminfo(&i);
 
@@ -23,17 +15,17 @@ void print_memory_statistic(struct seq_file *m) {
     show_message(m, "Free memory: %ld kB\n", convert_to_kb(i.freeram));
     show_message(m, "Available memory: %ld kB\n", convert_to_kb(si_mem_available()));
 
-    //EXIT_LOG();
+    EXIT_LOG();
 }
 
 void print_processes_statistic(struct seq_file *m) {
     struct task_struct *task;
     int total = 0, running = 0, interruptible = 0, uninterruptible = 0, stopped = 0, traced = 0;
 
-    //ENTER_LOG();
+    ENTER_LOG();
 
     for_each_process(task) {
-        switch (task->state) {
+        switch (task->__state) {
             case TASK_RUNNING:
                 running++;
                 break;
@@ -56,7 +48,7 @@ void print_processes_statistic(struct seq_file *m) {
                 uninterruptible++;
                 break;
             default:
-                printk(KERN_INFO "%ld %s %d\n", task->state, task->comm, task->pid);
+                printk(KERN_INFO "%d %s %d\n", task->__state, task->comm, task->pid);
         }
 
         total++;
@@ -68,9 +60,35 @@ void print_processes_statistic(struct seq_file *m) {
     show_message(m, "Stopped: %d\n", stopped);
     show_message(m, "Traced: %d\n", traced);
 
-    //EXIT_LOG();
+    EXIT_LOG();
+}
+
+syscalls_info_t syscalls_time_array[TIME_ARRAY_SIZE];
+
+static inline void walk_bits_and_find_syscalls(struct seq_file *m, uint64_t num) {
+    int i;
+
+    for (i = 0; i < 64; i++) {
+        if (num & (1UL << i)) {
+            show_message(m, "==== %d\n", i);
+            show_message(m, "%lld ======\n", num);
+        }
+    }
 }
 
 void print_syscall_statistic(struct seq_file *m) {
-    show_message(m, "Exec calls: %d", 123);
+    size_t i;
+    uint64_t tmp;
+
+    for (i = 0; i < TIME_ARRAY_SIZE; i++) {
+        tmp = syscalls_time_array[i].p1;
+        if (tmp != 0) {
+            walk_bits_and_find_syscalls(m, tmp);
+        }
+
+        tmp = syscalls_time_array[i].p2;
+        if (tmp != 0) {
+            walk_bits_and_find_syscalls(m, tmp);
+        }
+    }
 }

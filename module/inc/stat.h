@@ -7,5 +7,6 @@
 
 void print_processes_statistic(struct seq_file *m);
 void print_memory_statistic(struct seq_file *m);
+void print_syscall_statistic(struct seq_file *m);
 
 #endif
