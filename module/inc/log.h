@@ -6,7 +6,8 @@
 
 #define MODULE_NAME "monitor"
 
-void show_message(struct seq_file *m, const char *const f, const long num);
+void show_int_message(struct seq_file *m, const char *const f, const long num);
+void show_str_message(struct seq_file *m, const char *const f, const char *const s);
 
 #define ENTER_LOG() do { printk(KERN_INFO "%s: function entry %s | line: %d\n", MODULE_NAME, __func__, __LINE__); } while(0);
 #define EXIT_LOG() do { printk(KERN_INFO "%s: exit function %s | line: %d\n", MODULE_NAME, __func__, __LINE__); } while(0);

@@ -15,9 +15,23 @@
 
 static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs)
 {
-	return fregs;
+    return fregs;
 }
 #endif
+
+ktime_t start_time;
+
+static void inline update_syscall_array(int syscall_num) {
+    ktime_t time;
+
+    time = ktime_get_boottime_seconds() - start_time;
+    /* TODO: atomic operation or spinlock */
+    if (syscall_num < 64) {
+        syscalls_time_array[time % TIME_ARRAY_SIZE].p1 |= 1UL << syscall_num;
+    } else {
+        syscalls_time_array[time % TIME_ARRAY_SIZE].p2 |= 1UL << (syscall_num % 64);
+    }
+}
 
 /* sys_clone */
 #ifdef PTREGS_SYSCALL_STUBS
@@ -25,12 +39,7 @@ static asmlinkage long (*real_sys_clone)(struct pt_regs *regs);
 
 static asmlinkage long hook_sys_clone(struct pt_regs *regs)
 {
-    ktime_t time;
-
-    time = ktime_get_boottime_seconds();
-    /* TODO: atomic operation or spinlock */
-    syscalls_time_array[time % TIME_ARRAY_SIZE].p1 |= SYSCLONE_NUM;
-
+    update_syscall_array(SYS_CLONE_NUM);
     return real_sys_clone(regs);
 }
 #else
@@ -42,13 +51,30 @@ static asmlinkage long hook_sys_clone(unsigned long clone_flags,
         unsigned long newsp, int __user *parent_tidptr,
         int __user *child_tidptr, unsigned long tls)
 {
-    ktime_t time;
-
-    time = ktime_get_boottime_seconds();
-    /* TODO: atomic operation or spinlock */
-    syscalls_time_array[time % TIME_ARRAY_SIZE].p1 |= SYSCLONE_NUM;
-
+    update_syscall_array(SYS_CLONE_NUM);
     return real_sys_clone(clone_flags, newsp, parent_tidptr, child_tidptr, tls);
+}
+#endif
+
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_execve)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_execve(struct pt_regs *regs)
+{
+    update_syscall_array(SYS_EXECVE_NUM);
+    return real_sys_execve(regs);
+}
+#else
+static asmlinkage long (*real_sys_execve)(const char __user *filename,
+        const char __user *const __user *argv,
+        const char __user *const __user *envp);
+
+static asmlinkage long fh_sys_execve(const char __user *filename,
+        const char __user *const __user *argv,
+        const char __user *const __user *envp)
+{
+    update_syscall_array(SYS_EXECVE_NUM);
+    return real_sys_execve(filename, argv, envp);
 }
 #endif
 
@@ -71,30 +97,30 @@ static asmlinkage long hook_sys_clone(unsigned long clone_flags,
 
 static struct ftrace_hook hooked_functions[] = {
     ADD_HOOK("sys_clone", hook_sys_clone, &real_sys_clone),
-    //HOOK("sys_execve",  fh_sys_execve,  &real_sys_execve),
+    ADD_HOOK("sys_execve",  hook_sys_execve,  &real_sys_execve),
 };
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,7,0)
 static unsigned long lookup_name(const char *name)
 {
-	struct kprobe kp = {
-		.symbol_name = name
-	};
-	unsigned long retval;
+    struct kprobe kp = {
+        .symbol_name = name
+    };
+    unsigned long retval;
 
     ENTER_LOG();
 
-	if (register_kprobe(&kp) < 0) {
+    if (register_kprobe(&kp) < 0) {
         EXIT_LOG();
         return 0;
     }
 
-	retval = (unsigned long) kp.addr;
-	unregister_kprobe(&kp);
+    retval = (unsigned long) kp.addr;
+    unregister_kprobe(&kp);
 
     EXIT_LOG();
 
-	return retval;
+    return retval;
 }
 #else
 static unsigned long lookup_name(const char *name)
@@ -102,7 +128,7 @@ static unsigned long lookup_name(const char *name)
     unsigned long retval;
 
     ENTER_LOG();
-	retval = kallsyms_lookup_name(name);
+    retval = kallsyms_lookup_name(name);
     EXIT_LOG();
 
     return retval;
@@ -127,13 +153,13 @@ static int resolve_hook_address(struct ftrace_hook *hook)
 }
 
 static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
-		struct ftrace_ops *ops, struct ftrace_regs *fregs)
+        struct ftrace_ops *ops, struct ftrace_regs *fregs)
 {
     struct pt_regs *regs = ftrace_get_regs(fregs);
-	struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
+    struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
 
-	if (!within_module(parent_ip, THIS_MODULE)) {
-		regs->ip = (unsigned long)hook->function;
+    if (!within_module(parent_ip, THIS_MODULE)) {
+        regs->ip = (unsigned long)hook->function;
     }
 }
 

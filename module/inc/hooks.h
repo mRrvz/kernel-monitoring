@@ -8,6 +8,9 @@
 
 #include "log.h"
 
+#define SYS_CLONE_NUM 56
+#define SYS_EXECVE_NUM 59
+
 struct ftrace_hook {
     const char *name;
     void *function;
@@ -34,7 +37,5 @@ extern syscalls_info_t syscalls_time_array[TIME_ARRAY_SIZE];
 
 void remove_hooks(void);
 int install_hooks(void);
-
-#define SYSCLONE_NUM 1UL << 55
 
 #endif
