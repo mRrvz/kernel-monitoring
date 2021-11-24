@@ -35,7 +35,31 @@
 
 \subsection{Модификация таблицы системных вызовов}
 
+Все обработчики системных вызовов расположены в таблице \texttt{sys\_call\_table}. Подмена значений в этой таблице приведёт к смене поведения всей системы. Сохранив старое значение обработчика и подставив в таблицу собственный обработчик, можно перехватить любой системный вызов.
+
+Особенности данного подхода:
+
+\begin{itemize}
+	\item минимальные накладные расходы;
+	\item не требуется специальная конфигурация ядра;
+	\item техническая сложность реализации -- необходимо модифицировать таблицу системных вызовов;
+	\item из-за ряда оптимизаций, реализованных в ядре, некоторые обработчики невозможно перехватить \cite{habr-profiling-linux};
+	\item можно перехватить только системные вызовы -- нельзя перехватить обычные функции.
+\end{itemize}
+
 \subsection{kprobes}
+
+\texttt{kprobes} \cite{kprobes} -- специальный интерфейс, предназначенный для отладки и трассировки ядра. Данный интерфейс позволяет устанавливать пред- и пост-обработчики для любой инструкции в ядре, а так же обработчики на вход и возврат из функции. Обработчики получают доступ к регистрам и могут изменять их значение. Таким образом, \texttt{kprobes} можно использовать как и в целях мониторинга, так и для возможности повлиять на дальнейший ход работы ядра \cite{habr-profiling-linux}.
+
+Особенности рассматриваемого интерфейса:
+
+\begin{itemize}
+	\item перехват любой инструкции в ядре -- это реализуется с помощью точек останова (инструкция \texttt{int3}), внедряемых в исполняемый код ядра. Таким образом, можно перехватить любую функцию в ядре;
+	\item хорошо задокументированный API;
+	\item нетривиальные накладные расходы -- для расстановки и обработки точек останова необходимо большое количество процессорного времени \cite{habr-profiling-linux};
+	\item техническая сложность реализации. Так, например, чтобы получить аргументы функции или значения её локальных переменных нужно знать, в каких регистрах, или в каком месте на стеке они находятся, и самостоятельно их оттуда извлекать;
+	\item при подмене адреса возврата из функции используется стек, реализованный с помощью буффера фиксированного размера. Таким образом, при большом количестве одновременных вызовов перехваченной функции, могут быть пропущены срабатывания.
+\end{itemize}
 
 \subsection{Kernel tracepoints}
 
@@ -75,15 +99,15 @@
 		\hline
 		Название & Дин. загрузка & Перехват любых функций & Любая конфигурация ядра & Простота реализации & Наличие документации \\
 		\hline
-		Linux Security Module & & & & & \\
+		Linux Security Module & Нет & Да & Нет & Нет & Нет \\
 		\hline
-		Модификация таблицы системных вызовов & & & & & \\
+		Модификация таблицы системных вызовов & Да & Нет & Да & Нет & Нет \\
 		\hline
-		kprobes & & & & & \\
+		kprobes & Да & Да & Да & Нет & Да \\
 		\hline
-		kernel tracepoints & & & & &  \\
+		kernel tracepoints & Да & Да & Нет & Да & Нет \\
 		\hline
-		ftrace & & & & & \\
+		ftrace & Да & Да & Нет & Да & Да \\
 		\hline
 	\end{tabular}
 	\caption{Сравнение технологий, позволяющих трассировать ядро}
@@ -92,6 +116,102 @@
 В ходе анализа подходов к перехвату функций, был выбран фреймворк \texttt{ftrace}, так как он позволяет перехватить любую функцию зная лишь её имя, может быть загружен в ядро динамически и не требует специальной сборки ядра и имеет хорошо задокументированный API.
 
 \section{Информация о процессах и памяти}
+
+\subsection{Структура \texttt{struct task\_struct}}
+
+Информация о процессах в ядре хранится с помощью специальной структуры \texttt{struct task\_struct} \cite{task-struct}. Каждому процессу в системе соответствует структура \texttt{task\_struct}, которая полностью описывает процесс. Сами структуры связаны друг с другом по средствам кольцевого связанного списка. 
+
+Структура описывает текущее состояние процесса, его флаги, указатель на процессы-потомки и так далее. Стоит отметить, что для описания потоков, в ядре Linux так же используется данная структура -- различие лишь в установленных флагах. В листинге \ref{lst:task-struct} представлено объявление структуры с наиболее интересными полями.\\
+
+\begin{lstlisting}[label=lst:task-struct, caption=Листинг структуры task\_struct с наиболее интересными полями, language=c]
+struct task_struct {
+	#ifdef CONFIG_THREAD_INFO_IN_TASK
+	struct thread_info		thread_info;
+	#endif
+
+	unsigned int			__state;
+	...
+	unsigned int			flags;
+	...
+	#ifdef CONFIG_SMP
+	int				on_cpu;
+	...
+	int				recent_used_cpu;
+	#endif
+	...
+	int				recent_used_cpu;
+	...
+	#ifdef CONFIG_CGROUP_SCHED
+	struct task_group		*sched_task_group;
+	#endif
+	...
+	struct sched_info		sched_info;
+	...
+	struct list_head		tasks;
+	...
+}
+\end{lstlisting}
+
+Для работы с данной структурой внутри ядра объявлен ряд макросов. Например, чтобы обойти все процессы в системе, существует макрос \texttt{for\_each\_process}, который итерируется по связанному списку процессов. Состояния процесса так же описываются с помощью специальных макросов. Кроме того, существует ряд макросов, позволяющих проверить текущее состояние процесса, например, узнать, выполняется ли процесс в данный момент. Список этих макросов приведён в листингах \ref{lst:states} - \ref{lst:state-macroses}.\\
+
+\begin{lstlisting}[label=lst:states, caption=Описание состояний процесса с помощью макросов, language=c]
+#define TASK_RUNNING			0x0000
+#define TASK_INTERRUPTIBLE		0x0001
+#define TASK_UNINTERRUPTIBLE		0x0002
+#define __TASK_STOPPED			0x0004
+#define __TASK_TRACED			0x0008
+#define EXIT_DEAD			0x0010
+#define EXIT_ZOMBIE			0x0020
+#define EXIT_TRACE			(EXIT_ZOMBIE | EXIT_DEAD)
+#define TASK_PARKED			0x0040
+#define TASK_DEAD			0x0080
+#define TASK_WAKEKILL			0x0100
+#define TASK_WAKING			0x0200
+#define TASK_NOLOAD			0x0400
+#define TASK_NEW			0x0800
+#define TASK_RTLOCK_WAIT		0x1000
+#define TASK_STATE_MAX			0x2000
+#define TASK_KILLABLE			(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
+#define TASK_STOPPED			(TASK_WAKEKILL | __TASK_STOPPED)
+#define TASK_TRACED			(TASK_WAKEKILL | __TASK_TRACED)
+#define TASK_IDLE			(TASK_UNINTERRUPTIBLE | TASK_NOLOAD)
+#define TASK_NORMAL			(TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE)
+#define TASK_REPORT			(TASK_RUNNING | TASK_INTERRUPTIBLE | \
+TASK_UNINTERRUPTIBLE | __TASK_STOPPED | \
+__TASK_TRACED | EXIT_DEAD | EXIT_ZOMBIE | \
+TASK_PARKED)
+\end{lstlisting}
+
+\begin{lstlisting}[label=lst:state-macroses, caption=Макросы\, с помощью которых можно узнать текущее состояние процесса, language=c]
+#define task_is_running(task)		(READ_ONCE((task)->__state) == TASK_RUNNING)
+#define task_is_traced(task)		((READ_ONCE(task->__state) & __TASK_TRACED) != 0)
+#define task_is_stopped(task)		((READ_ONCE(task->__state) & __TASK_STOPPED) != 0)
+#define task_is_stopped_or_traced(task)	((READ_ONCE(task->__state) & (__TASK_STOPPED | __TASK_TRACED)) != 0)
+\end{lstlisting}
+
+\subsection{Структура \texttt{struct sysinfo}}
+
+Структура \texttt{struct sysinfo} \cite{sysinfo} хранит информацию статистику о всей системе: информацию о времени, прошедшем с начала запуска системы, количество занятой памяти и так далее. В листинге \ref{lst:sysinfo} приведёно объявление рассматриваемой структуры.\\
+
+\begin{lstlisting}[label=lst:sysinfo, caption=Листинг структуры \texttt{struct sysinfo}, language=c]
+struct sysinfo {
+	__kernel_long_t uptime;		/* Seconds since boot */
+	__kernel_ulong_t loads[3];	/* 1, 5, and 15 minute load averages */
+	__kernel_ulong_t totalram;	/* Total usable main memory size */
+	__kernel_ulong_t sharedram;	/* Amount of shared memory */
+	__kernel_ulong_t bufferram;	/* Memory used by buffers */
+	__kernel_ulong_t totalswap;	/* Total swap space size */
+	__kernel_ulong_t freeswap;	/* swap space still available */
+	__u16 procs;		   	/* Number of current processes */
+	__u16 pad;		   	/* Explicit padding for m68k */
+	__kernel_ulong_t totalhigh;	/* Total high memory size */
+	__kernel_ulong_t freehigh;	/* Available high memory size */
+	__u32 mem_unit;			/* Memory unit size in bytes */
+	char _f[20-2*sizeof(__kernel_ulong_t)-sizeof(__u32)];
+};
+\end{lstlisting}
+
+Для инициализации этой структуры используется функция \texttt{si\_meminfo()}. Стоит отметить, что рассматриваемая структура не содержит информации о свободной памяти в системе. Для того чтобы получить эту информацию, необходимо воспользоваться функцией \texttt{si\_mem\_available()}.
 
 \section{Загружаемые модули ядра}
 

@@ -1,4 +1,4 @@
-\begin{thebibliography}{1}
+\begin{thebibliography}{10}
 \def\selectlanguageifdefined#1{
 \expandafter\ifx\csname date#1\endcsname\relax
 \else\language\csname l@#1\endcsname\fi}
@@ -28,19 +28,26 @@ Linux Security Module Usage [Электронный ресурс].
   \url{https://developer.mozilla.org/ru/docs/Glossary/Callback_function}
   (дата обращения: 08.11.2021).
 
-\bibitem{kernel-tracepoints}
-\selectlanguageifdefined{russian}
-Using the Linux Kernel Tracepoints [Электронный ресурс].
-\newblock Режим доступа:
-  \url{https://www.kernel.org/doc/html/latest/trace/tracepoints.html} (дата
-  обращения: 08.11.2021).
-
 \bibitem{habr-profiling-linux}
 \selectlanguageifdefined{russian}
 Механизмы профилирования Linux -- Habr
   [Электронный ресурс].
 \newblock Режим доступа:
   \url{https://habr.com/ru/company/metrotek/blog/261003/} (дата
+  обращения: 08.11.2021).
+
+\bibitem{kprobes}
+\selectlanguageifdefined{russian}
+Kernel Probes (Kprobes) [Электронный ресурс].
+\newblock Режим доступа:
+  \url{https://www.kernel.org/doc/html/latest/trace/kprobes.html} (дата
+  обращения: 08.11.2021).
+
+\bibitem{kernel-tracepoints}
+\selectlanguageifdefined{russian}
+Using the Linux Kernel Tracepoints [Электронный ресурс].
+\newblock Режим доступа:
+  \url{https://www.kernel.org/doc/html/latest/trace/tracepoints.html} (дата
   обращения: 08.11.2021).
 
 \bibitem{ftrace}
@@ -66,5 +73,21 @@ NOP: No Operation (x86 Instruction Set Reference) [Электронный
 \newblock Режим доступа:
   \url{https://c9x.me/x86/html/file_module_x86_id_217.html} (дата
   обращения: 08.11.2021).
+
+\bibitem{task-struct}
+\selectlanguageifdefined{russian}
+include/linux/sched.h - Linux source code (v5.15.3) [Электронный
+  ресурс].
+\newblock Режим доступа:
+  \url{https://elixir.bootlin.com/linux/latest/source/include/linux/sched.h}
+  (дата обращения: 08.11.2021).
+
+\bibitem{sysinfo}
+\selectlanguageifdefined{russian}
+include/uapi/linux/sysinfo.h - Linux source code (v5.15.3)
+  [Электронный ресурс].
+\newblock Режим доступа:
+  \url{https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/sysinfo.h#L8}
+  (дата обращения: 08.11.2021).
 
 \end{thebibliography}
