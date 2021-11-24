@@ -90,4 +90,12 @@ include/uapi/linux/sysinfo.h - Linux source code (v5.15.3)
   \url{https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/sysinfo.h#L8}
   (дата обращения: 08.11.2021).
 
+\bibitem{proc-ops}
+\selectlanguageifdefined{russian}
+include/linux/proc\_fs.h - Linux source code (v5.15.3) [Электронный
+  ресурс].
+\newblock Режим доступа:
+  \url{https://elixir.bootlin.com/linux/latest/source/include/linux/proc\_fs.h#L29}
+  (дата обращения: 08.11.2021).
+
 \end{thebibliography}
