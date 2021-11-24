@@ -52,3 +52,16 @@ Mkfile.old
 dkms.conf
 
 .vscode/
+
+## Bibliography auxiliary files (bibtex/biblatex/biber):
+*.bbl
+*.bcf
+*.blg
+*-blx.aux
+*-blx.bib
+*.run.xml
+
+*.aux
+*.synctex.gz
+*.log
+*.toc
