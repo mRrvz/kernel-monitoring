@@ -20,17 +20,22 @@ static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs
 #endif
 
 ktime_t start_time;
+static DEFINE_SPINLOCK(my_lock);
 
 static void inline update_syscall_array(int syscall_num) {
     ktime_t time;
 
     time = ktime_get_boottime_seconds() - start_time;
-    /* TODO: atomic operation or spinlock */
+
+    spin_lock(&my_lock);
+
     if (syscall_num < 64) {
         syscalls_time_array[time % TIME_ARRAY_SIZE].p1 |= 1UL << syscall_num;
     } else {
         syscalls_time_array[time % TIME_ARRAY_SIZE].p2 |= 1UL << (syscall_num % 64);
     }
+
+    spin_unlock(&my_lock);
 }
 
 /* sys_clone */
