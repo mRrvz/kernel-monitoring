@@ -28,7 +28,7 @@ void print_memory_statistics(struct seq_file *m) {
 
 void print_task_statistics(struct seq_file *m) {
     struct task_struct *task;
-    int total = 0, running = 0, interruptible = 0, uninterruptible = 0, stopped = 0, traced = 0;
+    int total = 0, running = 0, stopped = 0, zombie = 0, interruptible = 0, uninterruptible;
 
     ENTER_LOG();
 
@@ -40,33 +40,34 @@ void print_task_statistics(struct seq_file *m) {
             case TASK_INTERRUPTIBLE:
                 interruptible++;
                 break;
-            case TASK_UNINTERRUPTIBLE:
+            case TASK_IDLE: /* (TASK_UNINTERRUPTIBLE | TASK_NOLOAD) */
                 uninterruptible++;
                 break;
-            case __TASK_STOPPED:
+            case TASK_STOPPED:
                 stopped++;
                 break;
-            case __TASK_TRACED:
-                traced++;
-                break;
-            case TASK_IDLE:
-            /* #define TASK_IDLE   (TASK_UNINTERRUPTIBLE | TASK_NOLOAD)
-               TASK_NOLOAD - mark s uninteruptible process that doesn’t contribute to
-               load average (hence no-load). */
-                uninterruptible++;
+            case TASK_TRACED: /* (TASK_WAKEKILL | __TASK_TRACED) */
+                stopped++;
                 break;
             default:
-                printk(KERN_INFO TASK_STATE_SPEC " %s %d\n", task->TASK_STATE_FIELD, task->comm, task->pid);
+                printk(KERN_INFO "%x %s %d\n", task->TASK_STATE_FIELD, task->comm, task->pid);
+        }
+
+        if (task->exit_state == EXIT_ZOMBIE)
+        {
+            zombie++;
         }
 
         total++;
     }
 
     show_int_message(m, "Total processes: %d\n", total);
-    show_int_message(m, "Interruptible: %d\n", interruptible);
-    show_int_message(m, "Uninterruptible: %d\n", uninterruptible);
+    show_int_message(m, "Running: %d\n", running);
+    show_int_message(m, "Sleeping: %d ", total - running - stopped - zombie);
+    show_int_message(m, "[Interruptible: %d | ", interruptible);
+    show_int_message(m, "Uninterruptible: %d]\n", uninterruptible);
     show_int_message(m, "Stopped: %d\n", stopped);
-    show_int_message(m, "Traced: %d\n", traced);
+    show_int_message(m, "Zombie: %d\n", zombie);
 
     EXIT_LOG();
 }
