@@ -98,4 +98,17 @@ include/linux/proc\_fs.h - Linux source code (v5.15.3) [Электронный
   \url{https://elixir.bootlin.com/linux/latest/source/include/linux/proc\_fs.h#L29}
   (дата обращения: 08.11.2021).
 
+\bibitem{c-language}
+\selectlanguageifdefined{russian}
+C99 standard note [Электронный ресурс].
+\newblock Режим доступа:
+  \url{http://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf} (дата
+  обращения: 10.11.2021).
+
+\bibitem{gcc}
+\selectlanguageifdefined{russian}
+GCC, the GNU Compiler Collection [Электронный ресурс].
+\newblock Режим доступа: \url{https://gcc.gnu.org/} (дата
+  обращения: 10.11.2021).
+
 \end{thebibliography}
