@@ -111,4 +111,18 @@ GCC, the GNU Compiler Collection [Электронный ресурс].
 \newblock Режим доступа: \url{https://gcc.gnu.org/} (дата
   обращения: 10.11.2021).
 
+\bibitem{kallsyms-removed}
+\selectlanguageifdefined{russian}
+Unexporting kallsyms\_lookup\_name() [Электронный ресурс].
+\newblock Режим доступа: \url{https://lwn.net/Articles/813350/}
+  (дата обращения: 10.11.2021).
+
+\bibitem{preproc}
+\selectlanguageifdefined{russian}
+Директивы препроцессора C [Электронный
+  ресурс].
+\newblock Режим доступа:
+  \url{https://docs.microsoft.com/ru-ru/dotnet/csharp/language-reference/preprocessor-directives}
+  (дата обращения: 10.11.2021).
+
 \end{thebibliography}

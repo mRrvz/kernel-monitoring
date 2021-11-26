@@ -4,11 +4,62 @@
 
 \section{Архитектура приложения}
 
-В состав разработанного программного обеспечения входит один загружаемый модуль ядра, который перехватывает все вызовы системных вызовов, подсчитывая их количество за определенный промежуток времени, предоставляет пользователю информацию о процессах и их состояниях, а так же информацию о состояние о загруженности оперативной памяти -- её общее количество, свободной и доступной в данный момент.
+В состав разработанного программного обеспечения входит один загружаемый модуль ядра, который перехватывает все вызовы системных вызовов, подсчитывая их количество за определенный промежуток времени, предоставляет пользователю информацию о процессах и их состояниях, а так же информацию и состояние о загруженности оперативной памяти -- её общее количество, свободной и доступной в данный момент.
 
 \section{Структура \texttt{struct ftrace\_hook}}
 
->
+В листинге \ref{lst:ftrace_hook} представлено объявление структуры \texttt{struct ftrace\_hook}, которая описывает каждую перехватываемую функцию.\\
+
+\begin{lstlisting}[label=lst:ftrace_hook, caption=Листинг структуры ftrace\_hook, language=c]
+struct ftrace_hook {
+	const char *name;
+	void *function;
+	void *original;
+	
+	unsigned long address;
+	struct ftrace_ops ops;
+};
+\end{lstlisting}
+
+Необходимо заполнить только первые три поля:
+
+\begin{itemize}
+	\item \texttt{name} -- имя перехватываемой функции;
+	\item \texttt{function} -- адрес функции обёртки, вызываемой вместо перехваченной функции;
+	\item \texttt{original} -- указатель на перехватываемую функцию.
+\end{itemize}
+
+Остальные поля считаются деталью реализации. Описание всех перехватываемых были собраны в массив, а для инициализации был написан специальный макрос (см. листинг \ref{lst:ftrace-array}).\\
+
+\begin{lstlisting}[label=lst:ftrace-array, caption=Объявление массива перехватываемых функций и специальный макрос для его инициализации, language=c]
+#define ADD_HOOK(_name, _function, _original) \
+{                                             \
+	.name = SYSCALL_NAME(_name),                \
+	.function = (_function),                    \
+	.original = (_original),                    \
+}
+
+static struct ftrace_hook hooked_functions[] = {
+	ADD_HOOK("sys_execve",  hook_sys_execve,  &real_sys_execve),
+	ADD_HOOK("sys_write",  hook_sys_write,  &real_sys_write),
+	ADD_HOOK("sys_open",  hook_sys_open,  &real_sys_open),
+	ADD_HOOK("sys_close",  hook_sys_close,  &real_sys_close),
+	ADD_HOOK("sys_mmap",  hook_sys_mmap,  &real_sys_mmap),
+	ADD_HOOK("sys_sched_yield",  hook_sys_sched_yield,  &real_sys_sched_yield),
+	ADD_HOOK("sys_socket",  hook_sys_socket,  &real_sys_socket),
+	ADD_HOOK("sys_connect",  hook_sys_connect,  &real_sys_connect),
+	ADD_HOOK("sys_accept",  hook_sys_accept,  &real_sys_accept),
+	ADD_HOOK("sys_sendto",  hook_sys_sendto,  &real_sys_sendto),
+	ADD_HOOK("sys_recvfrom",  hook_sys_recvfrom,  &real_sys_recvfrom),
+	ADD_HOOK("sys_sendmsg",  hook_sys_sendmsg,  &real_sys_sendmsg),
+	ADD_HOOK("sys_recvmsg",  hook_sys_recvmsg,  &real_sys_recvmsg),
+	ADD_HOOK("sys_shutdown",  hook_sys_shutdown,  &real_sys_shutdown),
+	ADD_HOOK("sys_read", hook_sys_read, &real_sys_read),
+	ADD_HOOK("sys_clone", hook_sys_clone, &real_sys_clone),
+	ADD_HOOK("sys_mkdir", hook_sys_mkdir, &real_sys_mkdir),
+	ADD_HOOK("sys_rmdir", hook_sys_rmdir, &real_sys_rmdir),
+};
+\end{lstlisting}
 
 \section{Алгоритм перехвата системного вызова}
 
@@ -63,13 +114,13 @@
 \end{figure}
 
 \begin{itemize}
-	\item Аггрегирующий массив -- это массив на 86400 элементов, состоящий из структур, имеющих два поля в виде 64-битных беззнаковых целых чисел. Это позволяет фиксировать до 128 системных вызов в секунду на протяжении 24 часов. Такой массив занимает всего лишь 1350 килобайт оперативной памяти;
+	\item Аггрегирующий массив -- это массив на 86400 элементов, состоящий из структур, имеющих два поля в виде 64-битных без знаковых целых чисел. Это позволяет фиксировать до 128 системных вызов в секунду на протяжении 24 часов. Такой массив занимает всего лишь 1350 килобайт оперативной памяти;
 	
-	\item спин-блокировка необходима с той целью, что несколько системных вызовов могут быть вызываны в один и тот же момент времени -- в таком случае, без блокировки, аггрегирующий массив потеряет часть данных;
+	\item спин-блокировка необходима с той целью, что несколько системных вызовов могут быть вызваны в один и тот же момент времени -- в таком случае, без блокировки, аггрегирующий массив потеряет часть данных;
 \end{itemize}
 
 \section*{Вывод}
 
-В данном разделе была рассмотрена общая архитектура приложения, алгоритм перехвата системных вызовов и подсчёта количества этих вызовов за выбранный промежуток.
+В данном разделе была рассмотрена общая архитектура приложения, алгоритм перехвата системных вызовов и подсчёта их количества за выбранный промежуток.
 
 
