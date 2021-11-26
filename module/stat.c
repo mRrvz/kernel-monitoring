@@ -234,7 +234,7 @@ void print_syscall_statistics(struct seq_file *m, const ktime_t mstart, ktime_t 
         }
 
         if ((tmp = syscalls_time_array[uptime - i].p2) != 0) {
-            walk_bits_and_find_syscalls(m, tmp, syscalls_arr_cnt);
+            walk_bits_and_find_syscalls(m, tmp, syscalls_arr_cnt + 64);
         }
     }
 

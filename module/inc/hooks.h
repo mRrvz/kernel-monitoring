@@ -8,8 +8,29 @@
 
 #include "log.h"
 
+#define SYS_READ_NUM 0
+#define SYS_WRITE_NUM 1
+#define SYS_OPEN_NUM 2
+#define SYS_CLOSE_NUM 3
+
+#define SYS_MMAP_NUM 9
+
+#define SYS_SCHED_YIELD_NUM 24
+
+#define SYS_SOCKET_NUM 41
+#define SYS_CONNECT_NUM 42
+#define SYS_ACCEPT_NUM 43
+#define SYS_SENDTO_NUM 44
+#define SYS_RECVFROM_NUM 45
+#define SYS_SENDMSG_NUM 46
+#define SYS_RECVMSG_NUM 47
+#define SYS_SHUTDOWN_NUM 48
+
 #define SYS_CLONE_NUM 56
 #define SYS_EXECVE_NUM 59
+
+#define SYS_MKDIR_NUM 83
+#define SYS_RMDIR_NUM 84
 
 struct ftrace_hook {
     const char *name;
