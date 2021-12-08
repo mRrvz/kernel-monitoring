@@ -3,7 +3,9 @@
 
 #include <linux/mm.h>
 #include <linux/seq_file.h>
+
 #include "hooks.h"
+#include "memory.h"
 
 void print_task_statistics(struct seq_file *m);
 void print_memory_statistics(struct seq_file *m);

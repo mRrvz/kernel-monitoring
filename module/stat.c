@@ -13,15 +13,21 @@ static inline long convert_to_kb(const long n) {
 }
 
 void print_memory_statistics(struct seq_file *m) {
-    struct sysinfo i;
+    struct sysinfo info;
+    long long secs;
+    int i;
 
     ENTER_LOG();
 
-    si_meminfo(&i);
+    si_meminfo(&info);
+    show_int_message(m, "Memory total: \t%ld kB\n", convert_to_kb(info.totalram));
 
-    show_int_message(m, "Memory total: %ld kB\n", convert_to_kb(i.totalram));
-    show_int_message(m, "Free memory: %ld kB\n", convert_to_kb(i.freeram));
-    show_int_message(m, "Available memory: %ld kB\n", convert_to_kb(si_mem_available()));
+    for (i = 0; i < mem_info_calls_cnt; i++) {
+        secs = mem_info_array[i].time_secs;
+        show_int3_message(m, "\nTime %.2llu:%.2llu:%.2llu\n", (secs / 3600 + 3) % 24, secs / 60 % 60, secs % 60);
+        show_int_message(m, "Free:      \t%ld kB\n", convert_to_kb(mem_info_array[i].free));
+        show_int_message(m, "Available: \t%ld kB\n", convert_to_kb(mem_info_array[i].available));
+    }
 
     EXIT_LOG();
 }

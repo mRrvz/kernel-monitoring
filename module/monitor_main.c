@@ -1,8 +1,10 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h> 
 #include <linux/time.h>
+#include <linux/kthread.h>
 
 #include "hooks.h"
+#include "memory.h"
 #include "stat.h"
 
 MODULE_LICENSE("GPL");
@@ -11,6 +13,7 @@ MODULE_DESCRIPTION("A utility for monitoring the state of the system and kernel 
 
 static struct proc_dir_entry *proc_root = NULL;
 static struct proc_dir_entry *proc_mem_file = NULL, *proc_task_file = NULL, *proc_syscall_file = NULL;
+static struct task_struct *worker_task = NULL;
 
 extern ktime_t start_time;
 /* default syscall range value is 10 min */
@@ -47,6 +50,38 @@ static int proc_release(struct inode *sp_node, struct file *sp_file) {
     return 0;
 }
 
+mem_info_t mem_info_array[MEMORY_ARRAY_SIZE];
+int mem_info_calls_cnt;
+
+int memory_cnt_task_handler_fn(void *args) {
+    struct sysinfo i;
+    struct timespec64 t;
+
+    ENTER_LOG();
+
+	allow_signal(SIGKILL);
+
+	while (!kthread_should_stop()) {
+        si_meminfo(&i);
+
+        ktime_get_real_ts64(&t);
+
+        mem_info_array[mem_info_calls_cnt].free = i.freeram;
+        mem_info_array[mem_info_calls_cnt].available = si_mem_available();
+        mem_info_array[mem_info_calls_cnt++].time_secs = t.tv_sec;
+
+		ssleep(10);
+
+		if (signal_pending(worker_task)) {
+			break;
+        }
+	}
+
+    EXIT_LOG();
+	do_exit(0);
+	return 0;
+}
+
 #define CHAR_TO_INT(ch) (ch - '0')
 
 static ktime_t convert_strf_to_seconds(char buf[]) {
@@ -65,8 +100,7 @@ static ssize_t proc_syscall_write(struct file *file, const char __user *buf, siz
 
     ENTER_LOG();
 
-    if (copy_from_user(&syscalls_time_range, buf, len) != 0)
-    {
+    if (copy_from_user(&syscalls_time_range, buf, len) != 0) {
         EXIT_LOG()
         return -EFAULT;
     }
@@ -98,6 +132,10 @@ static const struct proc_ops syscalls_ops = {
 
 static void cleanup(void) {
     ENTER_LOG();
+
+    if (worker_task) {
+		kthread_stop(worker_task);
+    }
 
     if (proc_mem_file != NULL) {
         remove_proc_entry("memory", proc_root);
@@ -152,6 +190,7 @@ err:
 
 static int __init md_init(void) {
     int rc;
+    int cpu;
 
     ENTER_LOG();
 
@@ -165,6 +204,17 @@ static int __init md_init(void) {
     }
 
     start_time = ktime_get_boottime_seconds();
+
+    cpu = get_cpu();
+	worker_task = kthread_create(memory_cnt_task_handler_fn, NULL, "memory counter thread");
+	kthread_bind(worker_task, cpu);
+
+    if (worker_task == NULL) {
+        cleanup();
+        return -1;
+    }
+
+    wake_up_process(worker_task);
 
     printk("%s: module loaded\n", MODULE_NAME);
     EXIT_LOG();
