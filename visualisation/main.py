@@ -2,6 +2,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from datetime import datetime
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> c4687b2acbe00e7b6aa87d1afa5466c4b3e51019
 def get_memory_info():
     with open('/proc/monitor/memory', 'r') as f:
         content = f.read()
@@ -17,7 +21,12 @@ def get_memory_info():
 
     for i, item in enumerate(splitted):
         if item.lower() == "time":
+<<<<<<< HEAD
             time_list.append(datetime.strptime(splitted[i + 1], '%H:%M:%S'))
+=======
+            y, m, d = str(datetime.now()).split(' ', 2)[0].split('-', 3)
+            time_list.append(datetime.strptime(f"{m}/{d}/{y[2:]} " + splitted[i + 1], '%m/%d/%y %H:%M:%S'))
+>>>>>>> c4687b2acbe00e7b6aa87d1afa5466c4b3e51019
         if item.lower() == "available:":
             available_list.append(total - int(splitted[i + 1]) / 1024)
         if item.lower() == "free:":
