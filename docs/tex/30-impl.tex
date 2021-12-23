@@ -159,6 +159,161 @@ static void inline update_syscall_array(int syscall_num) {
 }
 \end{lstlisting}
 
+\section{Получение информации о количестве системных вызовов}
+
+В листинге \ref{lst:syscall_proc} представлена реализация функций, которые агрегируют информацию о системных вызовах (данные массива update\_syscall\_array) и предоставляют ее в читаемом для пользователя виде.\\
+
+\begin{lstlisting}[label=lst:syscall_proc, caption=Реализация функций агрегации данных о системных вызовах, language=c]
+static inline void walk_bits_and_find_syscalls(struct seq_file *m, uint64_t num, int syscalls_arr_cnt[]) {
+	int i;
+	
+	for (i = 0; i < 64; i++) {
+		if (num & (1UL << i)) {
+			syscalls_arr_cnt[i]++;
+		}
+	}
+}
+
+void print_syscall_statistics(struct seq_file *m, const ktime_t mstart, ktime_t range) {
+	int syscalls_arr_cnt[128];
+	uint64_t tmp;
+	size_t i;
+	ktime_t uptime;
+	
+	memset((void*)syscalls_arr_cnt, 0, 128 * sizeof(int));
+	uptime = ktime_get_boottime_seconds() - mstart;
+	
+	if (uptime < range) {
+		range = uptime;
+	}
+	
+	for (i = 0; i < range; i++) {
+		if ((tmp = syscalls_time_array[uptime - i].p1) != 0) {
+			walk_bits_and_find_syscalls(m, tmp, syscalls_arr_cnt);
+		}
+		
+		if ((tmp = syscalls_time_array[uptime - i].p2) != 0) {
+			walk_bits_and_find_syscalls(m, tmp, syscalls_arr_cnt + 64);
+		}
+	}
+	
+	show_int_message(m, "Syscall statistics for the last %d seconds.\n\n", range);
+	
+	for (i = 0; i < 128; i++) {
+		if (syscalls_arr_cnt[i] != 0) {
+			show_str_message(m, "%s called ", syscalls_names[i]);
+			show_int_message(m, "%d times.\n", syscalls_arr_cnt[i]);
+		}
+	}
+}
+\end{lstlisting}
+
+\section{Информация о памяти в системе}
+
+Для сбора информации о доступной и свободной памяти в системе запускается отдельный поток ядра, который находиться в состоянии сна, и просыпаясь каждые 10 секунд, фиксирует эту информацию в результирующий массив. В листинге \ref{lst:mem_thread-f} представлена реализация этого потока, а в листинге \ref{lst:mem_thread} его инициализация.\\
+
+\begin{lstlisting}[label=lst:mem_thread-f, caption=Реализация функции сохраняющей информацию о доступной в системе памяти, language=c]
+mem_info_t mem_info_array[MEMORY_ARRAY_SIZE];
+int mem_info_calls_cnt;
+
+int memory_cnt_task_handler_fn(void *args) {
+	struct sysinfo i;
+	struct timespec64 t;
+	
+	ENTER_LOG();
+	
+	allow_signal(SIGKILL);
+	
+	while (!kthread_should_stop()) {
+		si_meminfo(&i);
+		
+		ktime_get_real_ts64(&t);
+		
+		mem_info_array[mem_info_calls_cnt].free = i.freeram;
+		mem_info_array[mem_info_calls_cnt].available = si_mem_available();
+		mem_info_array[mem_info_calls_cnt++].time_secs = t.tv_sec;
+		
+		ssleep(10);
+		
+		if (signal_pending(worker_task)) {
+			break;
+		}
+	}
+	
+	EXIT_LOG();
+	do_exit(0);
+	return 0;
+}
+\end{lstlisting}
+
+\begin{lstlisting}[label=lst:mem_thread, caption=Функция инициализации потока ядра, language=c]
+int my_thread_init() {
+	cpu = get_cpu();
+	worker_task = kthread_create(memory_cnt_task_handler_fn, NULL, "memory counter thread");
+	kthread_bind(worker_task, cpu);
+	
+	if (worker_task == NULL) {
+		cleanup();
+		return -1;
+	}
+	
+	wake_up_process(worker_task);
+	return 0;
+}
+\end{lstlisting}
+
+\section{Получение информации о процессах}
+
+В листинге \ref{lst:task_stat} представлена реализация функции, которая выводит информацию о состоянии всех текущих процессах на данный момент.\\
+
+\begin{lstlisting}[label=lst:task_stat, caption=Реализация функции получения состояний всех процессов в системе, language=c]
+void print_task_statistics(struct seq_file *m) {
+	struct task_struct *task;
+	int total = 0, running = 0, stopped = 0, zombie = 0, interruptible = 0, uninterruptible;
+	
+	ENTER_LOG();
+	
+	for_each_process(task) {
+		switch (task->TASK_STATE_FIELD) {
+			case TASK_RUNNING:
+			running++;
+			break;
+			case TASK_INTERRUPTIBLE:
+			interruptible++;
+			break;
+			case TASK_IDLE: /* (TASK_UNINTERRUPTIBLE | TASK_NOLOAD) */
+			uninterruptible++;
+			break;
+			case TASK_STOPPED:
+			stopped++;
+			break;
+			case TASK_TRACED: /* (TASK_WAKEKILL | __TASK_TRACED) */
+			stopped++;
+			break;
+			default:
+			printk(KERN_INFO "%x %s %d\n", task->TASK_STATE_FIELD, task->comm, task->pid);
+		}
+		
+		if (task->exit_state == EXIT_ZOMBIE)
+		{
+			zombie++;
+		}
+		
+		total++;
+	}
+	
+	show_int_message(m, "Total processes: %d\n", total);
+	show_int_message(m, "Running: %d\n", running);
+	show_int_message(m, "Sleeping: %d ", total - running - stopped - zombie);
+	show_int_message(m, "[Interruptible: %d | ", interruptible);
+	show_int_message(m, "Uninterruptible: %d]\n", uninterruptible);
+	show_int_message(m, "Stopped: %d\n", stopped);
+	show_int_message(m, "Zombie: %d\n", zombie);
+	
+	EXIT_LOG();
+}
+\end{lstlisting}
+
 \section{Примеры работы разработанного ПО}
 
 На рисунках \ref{img:memory_example} - \ref{img:syscalls_example_02} представлены примеры работы разработанного модуля ядра. Для наглядности перехватываются только 18 системных вызовов.
