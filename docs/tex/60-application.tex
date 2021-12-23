@@ -1,0 +1,1121 @@
+\chapter*{ПРИЛОЖЕНИЕ A}
+\addcontentsline{toc}{chapter}{Приложение А}
+
+\begin{lstlisting}[label=lst:monitor_main, caption=Листинг файла monitor\_main.c, language=c]
+#include <linux/module.h>
+#include <linux/proc_fs.h> 
+#include <linux/time.h>
+#include <linux/kthread.h>
+
+#include "hooks.h"
+#include "memory.h"
+#include "stat.h"
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Romanov Alexey");
+MODULE_DESCRIPTION("A utility for monitoring the state of the system and kernel load");
+
+static struct proc_dir_entry *proc_root = NULL;
+static struct proc_dir_entry *proc_mem_file = NULL, *proc_task_file = NULL, *proc_syscall_file = NULL;
+static struct task_struct *worker_task = NULL;
+
+extern ktime_t start_time;
+/* default syscall range value is 10 min */
+static ktime_t syscalls_range_in_seconds = 600;
+
+static int show_memory(struct seq_file *m, void *v) {
+	print_memory_statistics(m);
+	return 0;
+}
+
+static int proc_memory_open(struct inode *sp_inode, struct file *sp_file) {
+	return single_open(sp_file, show_memory, NULL);
+}
+
+static int show_tasks(struct seq_file *m, void *v) {
+	print_task_statistics(m);
+	return 0;
+}
+
+static int proc_tasks_open(struct inode *sp_inode, struct file *sp_file) {
+	return single_open(sp_file, show_tasks, NULL);
+}
+
+static int show_syscalls(struct seq_file *m, void *v) {
+	print_syscall_statistics(m, start_time, syscalls_range_in_seconds);
+	return 0;
+}
+
+static int proc_syscalls_open(struct inode *sp_inode, struct file *sp_file) {
+	return single_open(sp_file, show_syscalls, NULL);
+}
+
+static int proc_release(struct inode *sp_node, struct file *sp_file) {
+	return 0;
+}
+
+mem_info_t mem_info_array[MEMORY_ARRAY_SIZE];
+int mem_info_calls_cnt;
+
+int memory_cnt_task_handler_fn(void *args) {
+	struct sysinfo i;
+	struct timespec64 t;
+	
+	ENTER_LOG();
+	
+	allow_signal(SIGKILL);
+	
+	while (!kthread_should_stop()) {
+		si_meminfo(&i);
+		
+		ktime_get_real_ts64(&t);
+		
+		mem_info_array[mem_info_calls_cnt].free = i.freeram;
+		mem_info_array[mem_info_calls_cnt].available = si_mem_available();
+		mem_info_array[mem_info_calls_cnt++].time_secs = t.tv_sec;
+		
+		ssleep(10);
+		
+		if (signal_pending(worker_task)) {
+			break;
+		}
+	}
+	
+	EXIT_LOG();
+	do_exit(0);
+	return 0;
+}
+
+#define CHAR_TO_INT(ch) (ch - '0')
+
+static ktime_t convert_strf_to_seconds(char buf[]) {
+	/* time format: xxhyymzzs. For example: 01h23m45s */
+	ktime_t hours, min, secs;
+	
+	hours = CHAR_TO_INT(buf[0]) * 10 + CHAR_TO_INT(buf[1]);
+	min = CHAR_TO_INT(buf[3]) * 10 + CHAR_TO_INT(buf[4]);
+	secs = CHAR_TO_INT(buf[6]) * 10 + CHAR_TO_INT(buf[7]);
+	
+	return hours * 60 * 60 + min * 60 + secs;
+}
+
+static ssize_t proc_syscall_write(struct file *file, const char __user *buf, size_t len, loff_t *ppos) {
+	char syscalls_time_range[10];
+	
+	ENTER_LOG();
+	
+	if (copy_from_user(&syscalls_time_range, buf, len) != 0) {
+		EXIT_LOG()
+		return -EFAULT;
+	}
+	
+	syscalls_range_in_seconds = convert_strf_to_seconds(syscalls_time_range);
+	
+	EXIT_LOG();
+	return len;
+}
+
+static const struct proc_ops mem_ops = {
+	proc_read: seq_read,
+	proc_open: proc_memory_open,
+	proc_release: proc_release,
+};
+
+static const struct proc_ops tasks_ops = {
+	proc_read: seq_read,
+	proc_open: proc_tasks_open,
+	proc_release: proc_release,
+};
+
+static const struct proc_ops syscalls_ops = {
+	proc_read: seq_read,
+	proc_open: proc_syscalls_open,
+	proc_release: proc_release,
+	proc_write: proc_syscall_write,
+};
+
+static void cleanup(void) {
+	ENTER_LOG();
+	
+	if (worker_task) {
+		kthread_stop(worker_task);
+	}
+	
+	if (proc_mem_file != NULL) {
+		remove_proc_entry("memory", proc_root);
+	}
+	
+	if (proc_syscall_file != NULL) {
+		remove_proc_entry("syscalls", proc_root);
+	}
+	
+	if (proc_task_file != NULL) {
+		remove_proc_entry("tasks", proc_root);
+	}
+	
+	if (proc_root != NULL) {
+		remove_proc_entry(MODULE_NAME, NULL);
+	}
+	
+	remove_hooks();
+	
+	EXIT_LOG();
+}
+
+static int proc_init(void) {
+	ENTER_LOG();
+	
+	if ((proc_root = proc_mkdir(MODULE_NAME, NULL)) == NULL) {
+		goto err;
+	}
+	
+	if ((proc_mem_file = proc_create("memory", 066, proc_root, &mem_ops)) == NULL) {
+		goto err;
+	}
+	
+	if ((proc_task_file = proc_create("tasks", 066, proc_root, &tasks_ops)) == NULL)
+	{
+		goto err;
+	}
+	
+	if ((proc_syscall_file = proc_create("syscalls", 066, proc_root, &syscalls_ops)) == NULL)
+	{
+		goto err;
+	}
+	
+	EXIT_LOG();
+	return 0;
+	
+	err:
+	cleanup();
+	EXIT_LOG();
+	return -ENOMEM;
+}
+
+static int __init md_init(void) {
+	int rc;
+	int cpu;
+	
+	ENTER_LOG();
+	
+	if ((rc = proc_init())) {
+		return rc;
+	}
+	
+	if ((rc = install_hooks())) {
+		cleanup();
+		return rc;
+	}
+	
+	start_time = ktime_get_boottime_seconds();
+	
+	cpu = get_cpu();
+	worker_task = kthread_create(memory_cnt_task_handler_fn, NULL, "memory counter thread");
+	kthread_bind(worker_task, cpu);
+	
+	if (worker_task == NULL) {
+		cleanup();
+		return -1;
+	}
+	
+	wake_up_process(worker_task);
+	
+	printk("%s: module loaded\n", MODULE_NAME);
+	EXIT_LOG();
+	
+	return 0;
+}
+
+static void __exit md_exit(void) { 
+	cleanup();
+	
+	printk("%s: module unloaded\n", MODULE_NAME); 
+}
+
+module_init(md_init);
+module_exit(md_exit);
+\end{lstlisting}
+
+\begin{lstlisting}[label=lst:stat, caption=Листинг файла stat.c, language=c]
+#include "stat.h"
+
+#define TASK_STATE_FIELD state
+#define TASK_STATE_SPEC "%ld"
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5,13,0)
+#define TASK_STATE_FIELD __state
+#define TASK_STATE_SPEC "%d"
+#endif
+
+static inline long convert_to_kb(const long n) {
+	return n << (PAGE_SHIFT - 10);
+}
+
+void print_memory_statistics(struct seq_file *m) {
+	struct sysinfo info;
+	long long secs;
+	int i;
+	
+	ENTER_LOG();
+	
+	si_meminfo(&info);
+	show_int_message(m, "Memory total: \t%ld kB\n", convert_to_kb(info.totalram));
+	
+	for (i = 0; i < mem_info_calls_cnt; i++) {
+		secs = mem_info_array[i].time_secs;
+		show_int3_message(m, "\nTime %.2llu:%.2llu:%.2llu\n", (secs / 3600 + 3) % 24, secs / 60 % 60, secs % 60);
+		show_int_message(m, "Free:      \t%ld kB\n", convert_to_kb(mem_info_array[i].free));
+		show_int_message(m, "Available: \t%ld kB\n", convert_to_kb(mem_info_array[i].available));
+	}
+	
+	EXIT_LOG();
+}
+
+void print_task_statistics(struct seq_file *m) {
+	struct task_struct *task;
+	int total = 0, running = 0, stopped = 0, zombie = 0, interruptible = 0, uninterruptible;
+	
+	ENTER_LOG();
+	
+	for_each_process(task) {
+		switch (task->TASK_STATE_FIELD) {
+			case TASK_RUNNING:
+			running++;
+			break;
+			case TASK_INTERRUPTIBLE:
+			interruptible++;
+			break;
+			case TASK_IDLE: /* (TASK_UNINTERRUPTIBLE | TASK_NOLOAD) */
+			uninterruptible++;
+			break;
+			case TASK_STOPPED:
+			stopped++;
+			break;
+			case TASK_TRACED: /* (TASK_WAKEKILL | __TASK_TRACED) */
+			stopped++;
+			break;
+			default:
+			printk(KERN_INFO "%x %s %d\n", task->TASK_STATE_FIELD, task->comm, task->pid);
+		}
+		
+		if (task->exit_state == EXIT_ZOMBIE)
+		{
+			zombie++;
+		}
+		
+		total++;
+	}
+	
+	show_int_message(m, "Total processes: %d\n", total);
+	show_int_message(m, "Running: %d\n", running);
+	show_int_message(m, "Sleeping: %d ", total - running - stopped - zombie);
+	show_int_message(m, "[Interruptible: %d | ", interruptible);
+	show_int_message(m, "Uninterruptible: %d]\n", uninterruptible);
+	show_int_message(m, "Stopped: %d\n", stopped);
+	show_int_message(m, "Zombie: %d\n", zombie);
+	
+	EXIT_LOG();
+}
+
+syscalls_info_t syscalls_time_array[TIME_ARRAY_SIZE];
+
+static const char *syscalls_names[] = {
+	"sys_read", /* 0 */
+	"sys_write", 
+	"sys_open",
+	"sys_close",
+	"sys_newstat", /* 4 */
+	"sys_newfstat",
+	"sys_newlstat",
+	"sys_poll",
+	"sys_lseek",
+	"sys_mmap", /* 9 */
+	"sys_mprotect",
+	"sys_munmap",
+	"sys_brk",
+	"sys_rt_sigaction",
+	"sys_rt_sigprocmask", /* 14 */
+	"stub_rt_sigreturn",
+	"sys_ioctl",
+	"sys_pread64",
+	"sys_pwrite64",
+	"sys_readv", /* 19 */
+	"sys_writev",
+	"sys_access",
+	"sys_pipe",
+	"sys_select",
+	"sys_sched_yield", /* 24 */
+	"sys_mremap",
+	"sys_msync",
+	"sys_mincore",
+	"sys_madvise",
+	"sys_shmget", /* 29 */
+	"sys_shmat",
+	"sys_shmctl",
+	"sys_dup",
+	"sys_dup2",
+	"sys_pause", /* 34 */
+	"sys_nanosleep",
+	"sys_gettimer",
+	"sys_alarm",
+	"sys_settimer",
+	"sys_getpid", /* 39 */
+	"sys_sendfile64",
+	"sys_socket",
+	"sys_connect",
+	"sys_accept",
+	"sys_sendto", /* 44 */
+	"sys_recvfrom",
+	"sys_sendmsg",
+	"sys_recvmsg",
+	"sys_shutdown",
+	"sys_bind", /* 49 */
+	"sys_listen",
+	"sys_getsockname",
+	"sys_getpeername",
+	"sys_socketpair",
+	"sys_setsockopt", /* 54 */
+	"sys_getsockopt",
+	"sys_clone",
+	"sys_fork",
+	"sys_vfork",
+	"sys_execve", /* 59 */
+	"sys_exit",
+	"sys_wait4",
+	"sys_kill",
+	"sys_newuname",
+	"sys_semget", /* 64 */
+	"sys_semop",
+	"sys_semctl",
+	"sys_shmdt",
+	"sys_msgget",
+	"sys_msgsnd", /* 69 */
+	"sys_msgrcv",
+	"sys_msgctl",
+	"sys_fcntl",
+	"sys_flock",
+	"sys_fsync", /* 74 */
+	"sys_fdatasync",
+	"sys_truncate",
+	"sys_ftruncate",
+	"sys_getdents",
+	"sys_getcwd", /* 79 */
+	"sys_chdir",
+	"sys_fchdir",
+	"sys_rename",
+	"sys_mkdir",
+	"sys_rmdir", /* 84 */
+	"sys_creat",
+	"sys_link",
+	"sys_unlink",
+	"sys_symlink",
+	"sys_readlink", /* 89 */
+	"sys_chmod",
+	"sys_fchmod",
+	"sys_chown",
+	"sys_fchown",
+	"sys_lchown", /* 94 */
+	"sys_umask",
+	"sysgettimeofday",
+	"sys_getrlimit",
+	"sys_getrusage",
+	"sys_sysinfo", /* 99 */
+	"sys_times",
+	"sys_ptrace",
+	"sys_getuid",
+	"sys_syslog",
+	"sys_getgid", /* 104 */
+	"sys_setuid",
+	"sys_setgid",
+	"sys_geteuid",
+	"sys_getegid",
+	"sys_getpgid", /* 109 */
+	"sys_getppid",
+	"sys_getpgrp",
+	"sys_setsid",
+	"sys_setreuid",
+	"sys_setregid", /* 114 */
+	"sys_getgroups",
+	"sys_setgroups",
+	"sys_setresuid",
+	"sys_getresuid",
+	"sys_setresgid", /* 119 */
+	"sys_getresgid",
+	"sys_getpgid",
+	"sys_setfsuid",
+	"sys_setfsgid",
+	"sys_getsid", /* 124 */
+	"sys_capget",  
+	"sys_capset",
+	"sys_rt_sigpending", /* 127 */
+};
+
+static inline void walk_bits_and_find_syscalls(struct seq_file *m, uint64_t num, int syscalls_arr_cnt[]) {
+	int i;
+	
+	for (i = 0; i < 64; i++) {
+		if (num & (1UL << i)) {
+			syscalls_arr_cnt[i]++;
+		}
+	}
+}
+
+void print_syscall_statistics(struct seq_file *m, const ktime_t mstart, ktime_t range) {
+	int syscalls_arr_cnt[128];
+	uint64_t tmp;
+	size_t i;
+	ktime_t uptime;
+	
+	memset((void*)syscalls_arr_cnt, 0, 128 * sizeof(int));
+	uptime = ktime_get_boottime_seconds() - mstart;
+	
+	if (uptime < range) {
+		range = uptime;
+	}
+	
+	for (i = 0; i < range; i++) {
+		if ((tmp = syscalls_time_array[uptime - i].p1) != 0) {
+			walk_bits_and_find_syscalls(m, tmp, syscalls_arr_cnt);
+		}
+		
+		if ((tmp = syscalls_time_array[uptime - i].p2) != 0) {
+			walk_bits_and_find_syscalls(m, tmp, syscalls_arr_cnt + 64);
+		}
+	}
+	
+	show_int_message(m, "Syscall statistics for the last %d seconds.\n\n", range);
+	
+	for (i = 0; i < 128; i++) {
+		if (syscalls_arr_cnt[i] != 0) {
+			show_str_message(m, "%s called ", syscalls_names[i]);
+			show_int_message(m, "%d times.\n", syscalls_arr_cnt[i]);
+		}
+	}
+}
+\end{lstlisting}
+
+\begin{lstlisting}[label=lst:log, caption=Листинг файла log.c, language=c]
+#include "log.h"
+
+void show_int_message(struct seq_file *m, const char *const f, const long num) {
+	char tmp[256];
+	int len;
+	
+	len = snprintf(tmp, 256, f, num);
+	seq_write(m, tmp, len);
+}
+
+void show_int3_message(struct seq_file *m, const char *const f, const long n1, const long n2, const long n3) {
+	char tmp[256];
+	int len;
+	
+	len = snprintf(tmp, 256, f, n1, n2, n3);
+	seq_write(m, tmp, len);
+}
+
+void show_str_message(struct seq_file *m, const char *const f, const char *const s) {
+	char tmp[256];
+	int len;
+	
+	len = snprintf(tmp, 256, f, s);
+	seq_write(m, tmp, len);
+}
+\end{lstlisting}
+
+\begin{lstlisting}[label=lst:log, caption=Листинг файла hooks.c, language=c]
+#include "hooks.h"
+
+#pragma GCC optimize("-fno-optimize-sibling-calls")
+
+#if defined(CONFIG_X86_64) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0))
+#define PTREGS_SYSCALL_STUBS 1
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,11,0)
+#define FTRACE_OPS_FL_RECURSION FTRACE_OPS_FL_RECURSION_SAFE
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,11,0)
+#define ftrace_regs pt_regs
+
+static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs)
+{
+	return fregs;
+}
+#endif
+
+ktime_t start_time;
+static DEFINE_SPINLOCK(my_lock);
+
+static void inline update_syscall_array(int syscall_num) {
+	ktime_t time;
+	
+	time = ktime_get_boottime_seconds() - start_time;
+	
+	spin_lock(&my_lock);
+	
+	if (syscall_num < 64) {
+		syscalls_time_array[time % TIME_ARRAY_SIZE].p1 |= 1UL << syscall_num;
+	} else {
+		syscalls_time_array[time % TIME_ARRAY_SIZE].p2 |= 1UL << (syscall_num % 64);
+	}
+	
+	spin_unlock(&my_lock);
+}
+
+/* 0 - sys_read */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_read)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_read(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_READ_NUM);
+	return real_sys_read(regs);
+}
+#else
+static asmlinkage long (*real_sys_read)(unsigned int fd, char __user *buf, size_t count);
+
+static asmlinkage long hook_sys_read(unsigned int fd, char __user *buf, size_t count)
+{
+	update_syscall_array(SYS_READ_NUM);
+	return real_sys_read(fd, buf, count);
+}
+#endif
+
+/* 1 - sys_write */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_write)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_write(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_WRITE_NUM);
+	return real_sys_write(regs);
+}
+#else
+static asmlinkage long (*real_sys_write)(unsigned int fd, const char __user *buf, size_t count);
+
+static asmlinkage long hook_sys_write(unsigned int fd, const char __user *buf, size_t count)
+{
+	update_syscall_array(SYS_WRITE_NUM);
+	return real_sys_write(fd, buf, count);
+}
+#endif
+
+/* 2 - sys_open */
+#ifdef PTREGS_SYSCALL_STUBShttps://github.com/oljakon/information-security/blob/master/lab4_RSA/main.py
+static asmlinkage long (*real_sys_open)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_open(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_OPEN_NUM);
+	return real_sys_open(regs);
+}
+#else
+static asmlinkage long (*real_sys_open)(const char __user *filename, int flags, umode_t mode);
+
+static asmlinkage long hook_sys_open(const char __user *filename, int flags, umode_t mode);
+{
+	update_syscall_array(SYS_OPEN_NUM);
+	return real_sys_open(filename, flags, mode);
+}
+#endif
+
+/* 3 - sys_close */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_close)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_close(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_CLOSE_NUM);
+	return real_sys_close(regs);
+}
+#else
+static asmlinkage long (*real_sys_close)(unsigned int fd);
+
+static asmlinkage long hook_sys_close(unsigned int fd);
+{
+	update_syscall_array(SYS_CLOSE_NUM);
+	return real_sys_close(fd);
+}
+#endif
+
+/* 9 - sys_mmap */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_mmap)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_mmap(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_MMAP_NUM);
+	return real_sys_mmap(regs);
+}
+#else
+static asmlinkage long (*real_sys_mmap)(unsigned int fd);
+
+static asmlinkage long hook_sys_mmap(unsigned long addr, unsigned long len,
+int prot, int flags,
+int fd, long off)
+{
+	update_syscall_array(SYS_CLOSE_NUM);
+	return real_sys_mmap(addr, len, prot, flags, fd, off);
+}
+#endif
+
+/* 24 - sys_sched_yield */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_sched_yield)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_sched_yield(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_SCHED_YIELD_NUM);
+	return real_sys_sched_yield(regs);
+}
+#else
+static asmlinkage long (*real_sys_sched_yield)(void);
+
+static asmlinkage long hook_sys_sched_yield(void)
+{
+	update_syscall_array(SYS_SCHED_YIELD_NUM);
+	return real_sys_sched_yield();
+}
+#endif
+
+/* 41 - sys_socket */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_socket)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_socket(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_SOCKET_NUM);
+	return real_sys_socket(regs);
+}
+#else
+static asmlinkage long (*real_sys_socket)(int, int, int);
+
+static asmlinkage long hook_sys_socket(int a, int b, int c)
+{
+	update_syscall_array(SYS_SOCKET_NUM);
+	return real_sys_socket(a, b, c);
+}
+#endif
+
+/* 42 - sys_connect */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_connect)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_connect(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_CONNECT_NUM);
+	return real_sys_connect(regs);
+}
+#else
+static asmlinkage long (*real_sys_connect)(int, struct sockaddr __user *, int);
+
+static asmlinkage long hook_sys_connect(int a, struct sockaddr __user * b, int c);
+{
+	update_syscall_array(SYS_CONNECT_NUM);
+	return real_sys_connect(a, b, c);
+}
+#endif
+
+/* 43 - sys_accept */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_accept)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_accept(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_ACCEPT_NUM);
+	return real_sys_accept(regs);
+}
+#else
+static asmlinkage long (*real_sys_accept)(int, struct sockaddr __user *, int __user *)
+
+static asmlinkage long hook_sys_accept(int a, struct sockaddr __user * b, int __user *c)
+{
+	update_syscall_array(SYS_ACCEPT_NUM);
+	return real_sys_accept(a, b, c);
+}
+#endif
+
+/* 44 - sys_sendto */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_sendto)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_sendto(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_SENDTO_NUM);
+	return real_sys_sendto(regs);
+}
+#else
+static asmlinkage long (*real_sys_sendto)(int, void __user *, size_t, unsigned,
+struct sockaddr __user *, int);
+
+static asmlinkage long hook_sys_sendto(int a, void __user * b, size_t c, unsigned d,
+struct sockaddr __user *e, int f);
+{
+	update_syscall_array(SYS_SENDTO_NUM);
+	return real_sys_sendto(a, b, c, d, e, f);
+}
+#endif
+
+/* 45 - sys_recvfrom */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_recvfrom)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_recvfrom(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_RECVFROM_NUM);
+	return real_sys_recvfrom(regs);
+}
+#else
+static asmlinkage long (*real_sys_recvfrom)(int, void __user *, size_t, unsigned,
+struct sockaddr __user *, int __user *)
+
+static asmlinkage long hook_sys_recvfrom(int a, void __user *b, size_t c, unsigned d,
+struct sockaddr __user * e, int __user *f)
+{
+	update_syscall_array(SYS_RECVFROM_NUM);
+	return real_sys_recvfrom(a, b, c, d, e, f);
+}
+#endif
+
+/* 46 - sys_sendmsg */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_sendmsg)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_sendmsg(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_SENDMSG_NUM);
+	return real_sys_sendmsg(regs);
+}
+#else
+static asmlinkage long (*real_sys_sendmsg)(int fd, struct user_msghdr __user *msg, unsigned flags);
+
+static asmlinkage long hook_sys_sendmsg(int fd, struct user_msghdr __user *msg, unsigned flags)
+{
+	update_syscall_array(SYS_SENDMSG_NUM);
+	return real_sys_sendmsg(fd, msg, flags);
+}
+#endif
+
+/* 47 - sys_recvmsg */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_recvmsg)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_recvmsg(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_RECVMSG_NUM);
+	return real_sys_recvmsg(regs);
+}
+#else
+static asmlinkage long (*real_sys_recvmsg)(int fd, struct user_msghdr __user *msg, unsigned flags);
+
+static asmlinkage long hook_sys_recvmsg(int fd, struct user_msghdr __user *msg, unsigned flags)
+{
+	update_syscall_array(SYS_RECVMSG_NUM);
+	return real_sys_recvmsg(fd, msg, flags);
+}
+#endif
+
+/* 48 - sys_shutdown */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_shutdown)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_shutdown(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_SHUTDOWN_NUM);
+	return real_sys_shutdown(regs);
+}
+#else
+static asmlinkage long (*real_sys_shutdown)(int, int);
+
+static asmlinkage long hook_sys_shutdown(int t, int m)
+{
+	update_syscall_array(SYS_SHUTDOWN_NUM);
+	return real_sys_shutdown(t, m);
+}
+#endif
+
+/* 56 - sys_clone */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_clone)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_clone(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_CLONE_NUM);
+	return real_sys_clone(regs);
+}
+#else
+static asmlinkage long (*real_sys_clone)(unsigned long clone_flags,
+unsigned long newsp, int __user *parent_tidptr,
+int __user *child_tidptr, unsigned long tls);
+
+static asmlinkage long hook_sys_clone(unsigned long clone_flags,
+unsigned long newsp, int __user *parent_tidptr,
+int __user *child_tidptr, unsigned long tls)
+{
+	update_syscall_array(SYS_CLONE_NUM);
+	return real_sys_clone(clone_flags, newsp, parent_tidptr, child_tidptr, tls);
+}
+#endif
+
+/* 59 - sys_execve */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_execve)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_execve(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_EXECVE_NUM);
+	return real_sys_execve(regs);
+}
+#else
+static asmlinkage long (*real_sys_execve)(const char __user *filename,
+const char __user *const __user *argv,
+const char __user *const __user *envp);
+
+static asmlinkage long hook_sys_execve(const char __user *filename,
+const char __user *const __user *argv,
+const char __user *const __user *envp)
+{
+	update_syscall_array(SYS_EXECVE_NUM);
+	return real_sys_execve(filename, argv, envp);
+}
+#endif
+
+/* 83 - sys_mkdir */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_mkdir)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_mkdir(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_MKDIR_NUM);
+	return real_sys_mkdir(regs);
+}
+#else
+static asmlinkage long (*real_sys_mkdir)(const char __user *pathname, umode_t mode);
+
+static asmlinkage long hook_sys_mkdir(const char __user *pathname, umode_t mode);
+{
+	update_syscall_array(SYS_MKDIR_NUM);
+	return real_sys_mkdir(pathname, mode);
+}
+#endif
+
+/* 84 - sys_rmdir */
+#ifdef PTREGS_SYSCALL_STUBS
+static asmlinkage long (*real_sys_rmdir)(struct pt_regs *regs);
+
+static asmlinkage long hook_sys_rmdir(struct pt_regs *regs)
+{
+	update_syscall_array(SYS_RMDIR_NUM);
+	return real_sys_rmdir(regs);
+}
+#else
+static asmlinkage long (*real_sys_rmdir)(const char __user *pathname);
+
+static asmlinkage long hook_sys_rmdir(const char __user *pathname);
+{
+	update_syscall_array(SYS_RMDIR_NUM);
+	return real_sys_rmdir(pathname);
+}
+#endif
+
+
+/*
+* x86_64 kernels have a special naming convention for syscall entry points in newer kernels.
+* That's what you end up with if an architecture has 3 (three) ABIs for system calls.
+*/
+#ifdef PTREGS_SYSCALL_STUBS
+#define SYSCALL_NAME(name) ("__x64_" name)
+#else
+#define SYSCALL_NAME(name) (name)
+#endif
+
+#define ADD_HOOK(_name, _function, _original)   \
+{                                               \
+	.name = SYSCALL_NAME(_name),                \
+	.function = (_function),                    \
+	.original = (_original),                    \
+}
+
+static struct ftrace_hook hooked_functions[] = {
+	ADD_HOOK("sys_execve",  hook_sys_execve,  &real_sys_execve),
+	ADD_HOOK("sys_write",  hook_sys_write,  &real_sys_write),
+	ADD_HOOK("sys_open",  hook_sys_open,  &real_sys_open),
+	ADD_HOOK("sys_close",  hook_sys_close,  &real_sys_close),
+	ADD_HOOK("sys_mmap",  hook_sys_mmap,  &real_sys_mmap),
+	ADD_HOOK("sys_sched_yield",  hook_sys_sched_yield,  &real_sys_sched_yield),
+	ADD_HOOK("sys_socket",  hook_sys_socket,  &real_sys_socket),
+	ADD_HOOK("sys_connect",  hook_sys_connect,  &real_sys_connect),
+	ADD_HOOK("sys_accept",  hook_sys_accept,  &real_sys_accept),
+	ADD_HOOK("sys_sendto",  hook_sys_sendto,  &real_sys_sendto),
+	ADD_HOOK("sys_recvfrom",  hook_sys_recvfrom,  &real_sys_recvfrom),
+	ADD_HOOK("sys_sendmsg",  hook_sys_sendmsg,  &real_sys_sendmsg),
+	ADD_HOOK("sys_recvmsg",  hook_sys_recvmsg,  &real_sys_recvmsg),
+	ADD_HOOK("sys_shutdown",  hook_sys_shutdown,  &real_sys_shutdown),
+	ADD_HOOK("sys_read", hook_sys_read, &real_sys_read),
+	ADD_HOOK("sys_clone", hook_sys_clone, &real_sys_clone),
+	ADD_HOOK("sys_mkdir", hook_sys_mkdir, &real_sys_mkdir),
+	ADD_HOOK("sys_rmdir", hook_sys_rmdir, &real_sys_rmdir),
+};
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,7,0)
+static unsigned long lookup_name(const char *name)
+{
+	struct kprobe kp = {
+		.symbol_name = name
+	};
+	unsigned long retval;
+	
+	ENTER_LOG();
+	
+	if (register_kprobe(&kp) < 0) {
+		EXIT_LOG();
+		return 0;
+	}
+	
+	retval = (unsigned long) kp.addr;
+	unregister_kprobe(&kp);
+	
+	EXIT_LOG();
+	
+	return retval;
+}
+#else
+static unsigned long lookup_name(const char *name)
+{
+	unsigned long retval;
+	
+	ENTER_LOG();
+	retval = kallsyms_lookup_name(name);
+	EXIT_LOG();
+	
+	return retval;
+}
+#endif
+
+static int resolve_hook_address(struct ftrace_hook *hook)
+{
+	ENTER_LOG();
+	
+	if (!(hook->address = lookup_name(hook->name))) {
+		pr_debug("unresolved symbol: %s\n", hook->name);
+		EXIT_LOG();
+		return -ENOENT;
+	}
+	
+	*((unsigned long*) hook->original) = hook->address;
+	
+	EXIT_LOG();
+	
+	return 0;
+}
+
+static void notrace ftrace_thunk(unsigned long ip, unsigned long parent_ip,
+struct ftrace_ops *ops, struct ftrace_regs *fregs)
+{
+	struct pt_regs *regs = ftrace_get_regs(fregs);
+	struct ftrace_hook *hook = container_of(ops, struct ftrace_hook, ops);
+	
+	if (!within_module(parent_ip, THIS_MODULE)) {
+		regs->ip = (unsigned long)hook->function;
+	}
+}
+
+static int install_hook(struct ftrace_hook *hook) {
+	int rc;
+	
+	ENTER_LOG();
+	
+	if ((rc = resolve_hook_address(hook))) {
+		EXIT_LOG();
+		return rc;
+	}
+	
+	/* Callback function. */
+	hook->ops.func = ftrace_thunk; 
+	/* Save processor registers. */
+	hook->ops.flags = FTRACE_OPS_FL_SAVE_REGS
+	| FTRACE_OPS_FL_RECURSION
+	| FTRACE_OPS_FL_IPMODIFY;
+	
+	/* Turn of ftrace for our function. */
+	if ((rc = ftrace_set_filter_ip(&hook->ops, hook->address, 0, 0))) {
+		pr_debug("ftrace_set_filter_ip() failed: %d\n", rc);
+		return rc;
+	}
+	
+	/* Allow ftrace call our callback. */
+	if ((rc = register_ftrace_function(&hook->ops))) {
+		pr_debug("register_ftrace_function() failed: %d\n", rc);
+		ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0);
+	}
+	
+	EXIT_LOG();
+	
+	return rc;
+}
+
+static void remove_hook(struct ftrace_hook *hook) {
+	int rc;
+	
+	ENTER_LOG();
+	
+	if (hook->address == 0x00) {
+		EXIT_LOG();
+		return;
+	}
+	
+	if ((rc = unregister_ftrace_function(&hook->ops))) {
+		pr_debug("unregister_ftrace_function() failed: %d\n", rc);
+	}
+	
+	if ((rc = ftrace_set_filter_ip(&hook->ops, hook->address, 1, 0))) {
+		pr_debug("ftrace_set_filter_ip() failed: %d\n", rc);
+	}
+	
+	hook->address = 0x00;
+	
+	EXIT_LOG();
+}
+
+int install_hooks(void) {
+	size_t i;
+	int rc;
+	
+	ENTER_LOG();
+	
+	for (i = 0; i < ARRAY_SIZE(hooked_functions); i++) {
+		if ((rc = install_hook(&hooked_functions[i]))) {
+			pr_debug("instal_hooks failed: %d\n", rc);
+			goto err;
+		}
+	}
+	
+	EXIT_LOG();
+	
+	return 0;
+	
+	err: 
+	while (i != 0) {
+		remove_hook(&hooked_functions[--i]);
+	}
+	
+	EXIT_LOG();
+	
+	return rc;
+}
+
+void remove_hooks(void) {
+	size_t i;
+	
+	ENTER_LOG();
+	
+	for (i = 0; i < ARRAY_SIZE(hooked_functions); i++) {
+		remove_hook(&hooked_functions[i]);
+	}
+	
+	EXIT_LOG();
+}
+\end{lstlisting}
+
+\pagebreak
